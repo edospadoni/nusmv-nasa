@@ -1,0 +1,200 @@
+-- -------------------------------
+-- Flight-critical control systems
+-- -------------------------------
+
+-- -----------------------------------------------------------------------
+-- Si vuole modellare un modulo di selezione di valor-medio che fonda
+-- segnali provenienti, in maniera asincrona, da tre differenti sensori.
+-- L' obiettivo è quello di combinare i tre segnali in ingresso, in un
+-- unico segnale d'uscita, effettuando appunto il calcolo del valor-medio.
+--
+-- Questo modulo fa parte di un sistema di controllo di volo più ampio.
+-- -----------------------------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------------------
+-- Modulo main
+--
+-- Step 1   => 	Genero i segnale con l'apposito MODULE generaleSegnali()
+--
+-- Step 2   => 	Attivo il module di Mid-Value Select che si occuperà di
+--				prendere in ingresso i valori generati dai sensori e di
+-- 				effettuare il calcolo dell'output corretto
+--
+-- Step 3	=>	Calcolo le deadzones attivando il flag a TRUE se l'output è invariato
+-------------------------------------------------------------------------------------------------------
+MODULE main
+
+VAR
+-- i tre controllori (x -> valore, b -> validità)
+c1 : generaSegnale();
+c2 : generaSegnale();
+c3 : generaSegnale();
+
+-- definisco la variabile di output
+output : mvs(c1, c2, c3);
+
+-- flag di deadzone
+flag : deadZoneMonitor(output.precedente, output.calcolo);
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- PROPRIETA'
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+-- CORRETTEZZA: se il bit di validità di un controller è FALSE, il valore viene rimpiazzato con l'output precedente
+SPEC -- TRUE per ogni percorso di ogni stato
+AG ((!c1.b -> output.x1 = output.precedente) & (!c2.b -> output.x2 = output.precedente) & (!c3.b -> output.x3 = output.precedente));
+
+-- CORRETTEZZA: se tutti i bit sono FALSE allora il valore dell'output coincide con il precedente
+SPEC -- TRUE per ogni percorso di ogni stato
+AG (!c1.b & !c2.b & !c3.b -> output.calcolo = output.precedente);
+
+-- RAGGIUNGIBILITA': esiste un caso in cui i tre bit sono TRUE
+SPEC -- FALSE perchè nego l'esistenza di un caso in cui sono tutti validi (per controesempio e conferma)
+!EF (c1.b & c2.b & c3.b);
+
+-- CORRETTEZZA: se l'ouput rimane invariato il flag della deadzone diventa TRUE
+SPEC -- TRUE per ogni percorso di ogni stato
+AG (output.precedente = output.calcolo -> flag.attivo = TRUE);
+
+-- IRRAGGIUNGIBILITA': se tre bit sono TRUE, l'output non è mai diverso da midval
+SPEC -- TRUE perchè nego il verificarsi di quella condizione
+!AG (c1.b & c2.b & c3.b -> output.calcolo != output.midval);
+
+-- RAGGIUNGIBILITA': esite un caso in cui tre valori sono uguali?
+SPEC -- TRUE la condizione viene verificata
+EF (c1.x = c2.x & c1.x = c3.x & c2.x = c3.x);
+
+-- RAGGIUNGIBILITA': esite un caso in cui tre valori sono diversi?
+SPEC -- FALSE perchè nego il verificarsi di quella condizione (per controesempio e conferma)
+!EF (c1.x != c2.x & c1.x != c3.x & c2.x != c3.x);
+
+-- RAGGIUNGIBILTA' ESTESA: dati tre valori e tre bit validi viene preso correttamente il midval?
+SPEC -- TRUE perchè se i tre bit sono validi in ogni percorso di ogni stato, la proprietà è verificata
+AG EF (c1.b & c2.b & c3.b -> output.midval = (c1.x <= c2.x ? (c2.x <= c3.x ? c2.x : (c1.x <= c3.x ? c3.x : c1.x)) : (c1.x <= c3.x ? c1.x : (c2.x <= c3.x ? c3.x : c2.x))));
+
+-- LIVENESS: se un bit è FALSE il corrispondente valore è sostituito con l'output precedente e viene calcolato il midval normalmente
+SPEC -- TRUE perchè il ogni stato di ogni percorso sotto la prima condizione, la seconda è sempre verificata
+AG (c1.b & c2.b & !c3.b -> AF output.x3 = output.precedente & output.calcolo = output.midval);
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+--------------------------------------------------
+-- Dead-Zone Monitor
+--
+-- Se l'input cambia, ma l'ouput rimane lo stesso
+-- attivo un flag che:
+-- è FALSE 	=> se l'output è cambiato
+-- è TRUE 	=> se l'ouput è rimasto uguale
+--------------------------------------------------
+MODULE deadZoneMonitor(pre, output)
+
+-- la variaible di flag
+-- va a TRUE se non rileva cambiamenti nell'output
+VAR
+precedente : boolean;
+
+-- macro che definisce l'attivarsi o meno del flag
+DEFINE attivo := pre = output ? TRUE : FALSE;
+
+-- itero
+ASSIGN
+-- inizializzo
+init(precedente) := FALSE;
+-- se l'output non cambia attivo il flag
+next(precedente) := attivo;
+--------------------------------------------------
+
+
+-------------------------------------------------------------------------------------------------------
+-- Mid-Value Select (in ingresso prende i tre sensori)
+--
+-- Definisco delle macro:
+--  x1 =>   se il bit di validità è falso prendo come valore l'output precedente
+--          altrimenti prendo il valore generato c1.x
+--  x2 =>   se il bit di validità è falso prendo come valore l'output precedente
+--          altrimenti prendo il valore generato c2.x
+--  x3 =>   se il bit di validità è falso prendo come valore l'output precedente
+--          altrimenti prendo il valore generato c3.x
+--
+-- Definisco x1, x2, x3 come valori da usare nel calcolo del midval
+--
+-- Definisco il metodo per il calcolo del valore medio (midval)
+--
+-- Calcolo i possibili stati dell'output seguendo la logica delle specifiche
+-------------------------------------------------------------------------------------------------------
+MODULE mvs(c1, c2, c3)
+
+VAR
+-- contiene il valore dell'output
+precedente : 0..10;
+
+-- assegno il risultato del controllo
+DEFINE x1 := !c1.b ? precedente : c1.x;
+DEFINE x2 := !c2.b ? precedente : c2.x;
+DEFINE x3 := !c3.b ? precedente : c3.x;
+
+-- definisco il metodo del calcolo del valore medio
+DEFINE midval := x1 <= x2   ? (x2 <= x3 ? x2 : (x1 <= x3 ? x3 : x1)) 
+              : (x1 <= x3 	?  x1 : (x2 <= x3 ? x3 : x2));
+
+--	3 bit FALSE => l'output è l'output precedente
+-- 	2 bit FALSE => l'ouput è il valore del bit a TRUE
+--	1 bit FALSE => rimpiazzo il valore con l'output precedente e calcolo il midval
+--	altri casi	=> calcolo il midval
+-- seguendo le specifiche mappo tutti i casi e mi comporto di conseguenza
+DEFINE calcolo :=
+    case
+        -- se due bit sono invalidi l'output è dato dal valore
+        -- corrispondente al bit valido
+        (!c1.b & !c2.b & c3.b) : c3.x;
+        (!c1.b & !c3.b & c2.b) : c2.x;
+        (!c2.b & !c3.b & c1.b) : c1.x;
+
+        -- se due bit sono validi viene sostituto il valore
+        -- corrispondente a quello invalido con la macro 
+        (c1.b & c2.b & !c3.b) : midval;
+        (c1.b & !c2.b & c3.b) : midval;
+        (!c1.b & c2.b & c3.b) : midval;
+
+        -- se tutti i bit sono validi si procede al calcolo
+        (c1.b & c2.b & c3.b) : midval;
+
+        -- se tutti sono invalidi l'output rimane lo stesso
+        TRUE : precedente;
+    esac;
+
+-- iterazione
+ASSIGN
+-- assegnazione iniziale
+init(precedente) := 0;
+-- itero per gli altri valori
+next(precedente) := calcolo;
+-------------------------------------------------------------------------------------------------------
+
+
+----------------------------------------------
+-- Genero i segnali
+--
+-- x  => il valore del segnale generato
+-- b  => la validità del segnale
+----------------------------------------------
+MODULE generaSegnale()
+
+VAR
+-- contiene il valore
+x : 0..10;
+
+-- contiene la validità
+b : boolean;
+
+-- iterazione
+ASSIGN
+-- inizializzazione
+init(x) := 0;
+-- estraggo casualmente in quell'intervallo
+next(x) := {0..10};
+
+-- inizializzazione
+init(b) := FALSE;
+-- estraggo casualmente in quell'intervallo
+next(b) := {TRUE, FALSE};
+----------------------------------------------
